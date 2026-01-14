@@ -11,62 +11,83 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*", // Allow all origins for easier development
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
 
-// Store games in memory
-let games = {}; 
+// ROBUST STATE MANAGEMENT
+// Structure:
+// games[roomId] = {
+//   chess: ChessInstance,
+//   players: [ { id: "socketId", color: "w" } ]
+// }
+let games = {};
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  // 1. VALIDATION LISTENER (This was likely missing!)
+  // 1. Validator
   socket.on('checkRoom', (roomId, callback) => {
     const roomExists = games[roomId] !== undefined;
-    console.log(`Check Room Request: ${roomId} -> Exists? ${roomExists}`);
     callback(roomExists);
   });
 
-  // 2. JOIN ROOM LISTENER
+  // 2. Join Room (Fixed Logic)
   socket.on('joinRoom', (roomId) => {
-    const room = io.sockets.adapter.rooms.get(roomId);
-    
-    // Logic: If room is empty (or doesn't exist), user is White.
-    const clients = room ? room.size : 0;
-    const color = clients === 0 ? 'w' : 'b'; 
+    socket.join(roomId);
 
-    if (clients >= 2) {
-      socket.emit('roomFull');
+    // Initialize game if needed
+    if (!games[roomId]) {
+      games[roomId] = {
+        chess: new Chess(),
+        players: []
+      };
+    }
+
+    const game = games[roomId];
+
+    // Check if player is already in the game (re-join handling)
+    const existingPlayer = game.players.find(p => p.id === socket.id);
+
+    if (existingPlayer) {
+      // User is already here, just send them their info
+      socket.emit('playerColor', existingPlayer.color);
+      socket.emit('boardState', game.chess.fen());
       return;
     }
 
-    socket.join(roomId);
+    // Assign Color based on available slots
+    let assignedColor = null;
 
-    // Initialize game if it doesn't exist
-    if (!games[roomId]) {
-      games[roomId] = new Chess();
-      console.log(`New Game Created: ${roomId}`);
+    if (game.players.length === 0) {
+      assignedColor = 'w'; // First player is always White
+    } else if (game.players.length === 1) {
+      assignedColor = 'b'; // Second player is Black
+    } else {
+      socket.emit('roomFull'); // 3rd player rejected
+      return;
     }
 
-    const game = games[roomId];
-    
-    socket.emit('playerColor', color);
-    socket.emit('boardState', game.fen());
-    
-    console.log(`User joined ${roomId} as ${color === 'w' ? "White" : "Black"}`);
+    // Add player to the list
+    game.players.push({ id: socket.id, color: assignedColor });
+
+    // Send state
+    socket.emit('playerColor', assignedColor);
+    socket.emit('boardState', game.chess.fen());
+
+    console.log(`Player joined ${roomId} as ${assignedColor}`);
   });
 
-  // 3. MOVE LISTENER
+  // 3. Move Logic
   socket.on('move', ({ roomId, move }) => {
     const game = games[roomId];
 
-    if (game) {
+    if (game && game.chess) {
       try {
-        const result = game.move(move); 
+        const result = game.chess.move(move);
         if (result) {
-          io.to(roomId).emit('boardState', game.fen());
+          io.to(roomId).emit('boardState', game.chess.fen());
         }
       } catch (e) {
         console.log('Invalid move:', move);
@@ -74,8 +95,27 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 4. Cleanup on Disconnect
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
+
+    // Optional: Remove player from game so they can rejoin or someone else can take the spot
+    // Looping through all rooms to find where this socket was
+    for (const roomId in games) {
+      const game = games[roomId];
+      const playerIndex = game.players.findIndex(p => p.id === socket.id);
+
+      if (playerIndex !== -1) {
+        // Remove the player
+        game.players.splice(playerIndex, 1);
+
+        // If room is empty, delete the game to save memory
+        if (game.players.length === 0) {
+          delete games[roomId];
+        }
+        break;
+      }
+    }
   });
 });
 
