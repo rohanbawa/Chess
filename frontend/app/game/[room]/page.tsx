@@ -3,11 +3,13 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Chess } from "chess.js";
-import { Chessboard } from "react-chessboard";
+import dynamic from 'next/dynamic';
 import { socket } from "../../../socket";
 
-// NUCLEAR FIX: Cast the component to 'any' to completely disable type checking for it.
-const SafeChessboard = Chessboard as any;
+const Chessboard = dynamic(() => import("react-chessboard").then((mod) => mod.Chessboard), {
+  ssr: false,
+  loading: () => <div className="w-full h-full bg-zinc-800 animate-pulse rounded-lg"></div>
+});
 
 export default function GamePage() {
   const params = useParams();
@@ -18,36 +20,48 @@ export default function GamePage() {
   const [color, setColor] = useState<'w' | 'b' | null>(null);
 
   useEffect(() => {
-    // 1. Connect to server
-    if (!socket.connected) socket.connect();
-
-    // 2. Setup Listeners BEFORE joining (Critical Fix!)
-    // If we join before listening, we might miss the server's immediate reply.
-    socket.on("boardState", (fenString: string) => {
+    // Define listeners
+    const onBoardState = (fenString: string) => {
       const newGame = new Chess(fenString);
       setGame(newGame);
       setFen(fenString);
-    });
+    };
 
-    socket.on("playerColor", (assignedColor: 'w' | 'b') => {
+    const onPlayerColor = (assignedColor: 'w' | 'b') => {
       console.log("My color is:", assignedColor);
       setColor(assignedColor);
-    });
+    };
 
-    // 3. NOW join the room
-    socket.emit("joinRoom", roomId);
+    const onConnect = () => {
+      console.log("Connected/Reconnected! Joining room check...");
+      socket.emit("joinRoom", roomId);
+    };
+
+    // Attach listeners
+    socket.on("boardState", onBoardState);
+    socket.on("playerColor", onPlayerColor);
+    socket.on("connect", onConnect);
+
+    // Connect if disconnected
+    if (!socket.connected) {
+      socket.connect();
+    } else {
+      // If already connected, manual join
+      onConnect();
+    }
 
     // Cleanup listeners on unmount
     return () => {
-      socket.off("boardState");
-      socket.off("playerColor");
+      socket.off("boardState", onBoardState);
+      socket.off("playerColor", onPlayerColor);
+      socket.off("connect", onConnect);
       socket.disconnect();
     };
   }, [roomId]);
 
-  const onDrop = (sourceSquare: any, targetSquare: any) => {
+  const onDrop = ({ sourceSquare, targetSquare }: { sourceSquare: string, targetSquare: string | null }) => {
     // Prevent moving if it's not your turn or not your color
-    if (game.turn() !== color) return false;
+    if (game.turn() !== color || !targetSquare) return false;
 
     try {
       const tempGame = new Chess(game.fen());
@@ -93,10 +107,12 @@ export default function GamePage() {
       </div>
 
       <div className="w-full max-w-[500px] aspect-square border-4 border-neutral-700 rounded-lg overflow-hidden shadow-2xl">
-        <SafeChessboard
-          position={fen}
-          onPieceDrop={onDrop}
-          boardOrientation={color === 'w' ? 'white' : 'black'}
+        <Chessboard
+          options={{
+            position: fen,
+            onPieceDrop: onDrop,
+            boardOrientation: color === 'w' ? 'white' : 'black',
+          }}
         />
       </div>
 

@@ -60,10 +60,13 @@ io.on('connection', (socket) => {
     // Assign Color based on available slots
     let assignedColor = null;
 
-    if (game.players.length === 0) {
-      assignedColor = 'w'; // First player is always White
-    } else if (game.players.length === 1) {
-      assignedColor = 'b'; // Second player is Black
+    const isWhiteTaken = game.players.some(p => p.color === 'w');
+    const isBlackTaken = game.players.some(p => p.color === 'b');
+
+    if (!isWhiteTaken) {
+      assignedColor = 'w';
+    } else if (!isBlackTaken) {
+      assignedColor = 'b';
     } else {
       socket.emit('roomFull'); // 3rd player rejected
       return;
