@@ -16,12 +16,6 @@ const io = new Server(server, {
   }
 });
 
-// ROBUST STATE MANAGEMENT
-// Structure:
-// games[roomId] = {
-//   chess: ChessInstance,
-//   players: [ { id: "socketId", color: "w" } ]
-// }
 let games = {};
 
 io.on('connection', (socket) => {
@@ -33,7 +27,7 @@ io.on('connection', (socket) => {
     callback(roomExists);
   });
 
-  // 2. Join Room (Fixed Logic)
+  // 2. Join Room 
   socket.on('joinRoom', (roomId) => {
     socket.join(roomId);
 
@@ -47,13 +41,14 @@ io.on('connection', (socket) => {
 
     const game = games[roomId];
 
-    // Check if player is already in the game (re-join handling)
+    // Check if player is already in the game
     const existingPlayer = game.players.find(p => p.id === socket.id);
 
     if (existingPlayer) {
       // User is already here, just send them their info
       socket.emit('playerColor', existingPlayer.color);
       socket.emit('boardState', game.chess.fen());
+      socket.emit('moveHistory', game.chess.history());
       return;
     }
 
@@ -91,6 +86,7 @@ io.on('connection', (socket) => {
         const result = game.chess.move(move);
         if (result) {
           io.to(roomId).emit('boardState', game.chess.fen());
+          io.to(roomId).emit('moveHistory', game.chess.history());
         }
       } catch (e) {
         console.log('Invalid move:', move);
@@ -102,8 +98,7 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
 
-    // Optional: Remove player from game so they can rejoin or someone else can take the spot
-    // Looping through all rooms to find where this socket was
+    // Remove player from game so they can rejoin or someone else can take the spot
     for (const roomId in games) {
       const game = games[roomId];
       const playerIndex = game.players.findIndex(p => p.id === socket.id);
@@ -121,7 +116,6 @@ io.on('connection', (socket) => {
     }
   });
 });
-
 
 const PORT = process.env.PORT || 4000;
 
